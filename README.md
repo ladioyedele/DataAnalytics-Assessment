@@ -21,12 +21,12 @@ The task was to identify customers holding both a savings plan and an investment
 
 I joined customer data with plans and deposits, counting distinct savings and investment plans separately. To avoid inflating totals due to multiple deposits per plan, I pre-aggregated deposits at the plan level before summing them by customer. This ensured accuracy.
 
-A notable early step was concatenating the `first_name` and `last_name` columns into a unified `name` field, since the dataset lacked a combined full name — making outputs more readable.
+A notable early step was concatenating the `first_name` and `last_name` columns into a unified `name` field, since the dataset lacked a combined full name making outputs more readable.
 
 ### Challenges & Solutions
 
 * **Error: No 'name' column in users table**
-  Initially, I tried selecting a `name` field that didn’t exist, causing SQL errors. I resolved this by updating the dataset to create a `name` column by concatenating `first_name` and `last_name`.
+  I noticed the `name` column was null, I resolved this by updating the dataset to populate the `name` column by concatenating `first_name` and `last_name`.
 
 * **Double counting deposits due to join duplication**
   Summing deposits directly in joins gave inflated values because a plan could have many transactions. I solved this by summing deposits per plan first in a CTE, then aggregating by customer.
