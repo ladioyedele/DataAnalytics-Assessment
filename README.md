@@ -13,83 +13,97 @@ Each query was crafted to follow best practices:
 
   ---
 
-## Question 1: Identify Customers with Funded Savings and Investment Plans
+## Question 1: Customers with Both Funded Savings and Investment Plans
 
-### Objective
-Find customers who have at least one funded savings plan **and** one funded investment plan, with their total deposits.
+### Approach
 
-### Solution Approach
-- A CTE was used to pre-aggregate deposits by `plan_id` to avoid double-counting due to multiple transactions.
-- Distinct savings and investment plans were counted for each customer.
-- Only users with at least one of each type were included.
-- The result was ordered by total deposits to highlight high-value customers.
+The task was to identify customers holding both a savings plan and an investment plan, and summarize their total deposits.
 
-### Challenges and Resolution
-- One challenge was ensuring the **customer name field was consistent and readable**. In the dataset, the `users_customuser` table had separate `first_name` and `last_name` fields. I updated the dataset using an SQL `UPDATE` query to concatenate them into a single `name` field for easier reference in all queries.
-- Another challenge was ensuring **accurate aggregation of deposit values**. Multiple transactions linked to a single plan could inflate totals. To solve this, I aggregated deposits by `plan_id` first, then summed them per customer.
-- Handling **duplicate or overlapping plan types** for users required filtering and counting only distinct plan IDs for each category.
-- Lastly, ensuring only **truly funded accounts** were included meant joining only users with actual deposits, rather than just checking plan flags.
+I joined customer data with plans and deposits, counting distinct savings and investment plans separately. To avoid inflating totals due to multiple deposits per plan, I pre-aggregated deposits at the plan level before summing them by customer. This ensured accuracy.
 
----
+A notable early step was concatenating the `first_name` and `last_name` columns into a unified `name` field, since the dataset lacked a combined full name — making outputs more readable.
 
-## Question 2: Segment Customers by Transaction Frequency
+### Challenges & Solutions
 
-### Objective
-Group customers into frequency bands (High, Medium, Low) based on their average number of monthly transactions.
+* **Error: No 'name' column in users table**
+  Initially, I tried selecting a `name` field that didn’t exist, causing SQL errors. I resolved this by updating the dataset to create a `name` column by concatenating `first_name` and `last_name`.
 
-### Solution Approach
-- CTE 1: Grouped transactions by user and month.
-- CTE 2: Calculated the average number of monthly transactions per user.
-- CTE 3: Joined this with user info and classified users into segments.
-- The final SELECT grouped and summarized by frequency category.
+* **Double counting deposits due to join duplication**
+  Summing deposits directly in joins gave inflated values because a plan could have many transactions. I solved this by summing deposits per plan first in a CTE, then aggregating by customer.
 
-### Frequency Categories
-- High Frequency: ≥ 10 transactions/month
-- Medium Frequency: 3–9 transactions/month
-- Low Frequency: ≤ 2 transactions/month
-
-### Challenges and Resolution
-Ensuring time was grouped by month required formatting the date string correctly. Sorting the frequency categories in the correct order also required a custom `ORDER BY` logic. Additionally, balancing performance with clarity using multiple CTEs required careful structuring to avoid subquery redundancy.
+* **Unexpectedly high savings counts (200+ plans for some customers)**
+  This seemed suspicious, so I wrote diagnostic queries to check the distribution of plan counts and looked for duplicates or anomalies in the data. It helped confirm data integrity and whether the numbers were realistic.
 
 ---
 
-## Question 3: Find Active Plans with No Transactions in Over a Year
+## Question 2: Customer Transaction Frequency Segmentation
 
-### Objective
-Identify savings or investment plans that are still active but have not had any transactions in the past 365 days.
+### Approach
 
-### Solution Approach
-- Filtered plans to exclude those marked as archived or deleted.
-- Joined only those plans that had **at least one** transaction (no LEFT JOIN).
-- Aggregated by plan ID to find the latest transaction date.
-- Filtered for plans where `DATEDIFF` exceeded 365 days.
+The goal was to classify customers based on average monthly transaction volume into High, Medium, or Low frequency groups.
 
-### Challenges and Resolution
-- A key challenge was distinguishing between plans that were inactive and those that had **never had a transaction**. To comply with the requirement, only previously active plans were considered using an `INNER JOIN`.
-- Ensuring performance didn’t degrade when grouping large transaction tables also required testing and tuning the use of `MAX()` over joined data.
+I grouped transactions by customer and month, counted monthly transactions, then averaged these counts per customer to get a monthly average. Joining with user data allowed me to assign frequency categories.
+
+Finally, I summarized how many customers fell into each category and calculated average transaction counts for those segments.
+
+### Challenges & Solutions
+
+* **Error: Can't group by derived column in HAVING clause**
+  My initial attempt to group by a case statement caused errors. I fixed this by doing the categorization inside a CTE and then grouping on that pre-calculated field.
+
+* **Grouping by month correctly**
+  Extracting the year and month from transaction dates was tricky. Using `DATE_FORMAT(transaction_date, '%Y-%m')` made it straightforward to group transactions monthly.
+
+* **Ordering frequency categories logically**
+  Alphabetical order wouldn't reflect the logical frequency hierarchy. I used a CASE statement in ORDER BY to fix the display order.
 
 ---
 
-## Question 4: Estimate Customer Lifetime Value (CLV)
+## Question 3: Identifying Inactive Plans (No Transactions Over 1 Year)
 
-### Objective
-Estimate CLV for each customer using this formula:
+### Approach
+
+I needed to find active plans without any transactions in the past 365 days.
+
+I joined plans with transactions, filtered out archived and deleted plans, and calculated the date of last transaction per plan. Using `DATEDIFF`, I measured inactivity duration and filtered for those exceeding 365 days.
+
+### Challenges & Solutions
+
+* **Including plans with no transactions caused NULL errors in DATEDIFF**
+  Initially, I included all plans with a LEFT JOIN, but plans without transactions produced NULLs causing `DATEDIFF` errors. The requirement specified previously active plans only, so switching to an INNER JOIN solved this by excluding plans with no transaction history.
+
+* **Filtering archived and deleted plans**
+  Early results were skewed by irrelevant plans. After learning about `is_archived` and `is_deleted` flags, I added filters to exclude them.
+
+* **Calculating days inactive accurately**
+  I confirmed that the difference between `CURRENT_DATE` and the last transaction date accurately reflected inactivity.
+
+---
+
+## Question 4: Estimating Customer Lifetime Value (CLV)
+
+### Approach
+
+The CLV formula combined transaction count, account tenure, and average transaction value, assuming a 0.1% profit margin per transaction.
+
+I computed tenure in months, filtered only successful transactions, and applied the formula:
 
 ```
-CLV = (total_transactions / tenure_months) * 12 * (0.001 * average_transaction_value)
+CLV = (total_transactions / tenure_months) * 12 * (0.001 * avg_transaction_value)
 ```
 
-### Solution Approach
-- Calculated account tenure using the `PERIOD_DIFF` between join date and current date.
-- Counted only successful transactions.
-- Averaged transaction values to calculate average profit per transaction (0.1% of amount).
-- Filtered out customers with 0-month tenure to avoid division errors.
+Customers with zero tenure were excluded to avoid division by zero.
 
-### Challenges and Resolution
-- Preventing **division by zero** was essential for users with zero or same-month tenure.
-- Normalizing the CLV across customers with different join dates and activity levels added complexity to the formula.
-- Ensuring only **relevant (successful)** transactions were used added an additional filter and safeguard to ensure CLV estimates reflect actual customer engagement.
+### Challenges & Solutions
 
+* **Division by zero errors for new customers**
+  Some users had zero months tenure causing errors. I added a HAVING clause to exclude these cases.
+
+* **Including failed transactions skewed results**
+  Initially, I counted all transactions, but failed or reversed ones inflated CLV. Adding a `WHERE transaction_status = 'SUCCESS'` filter fixed this.
+
+* **Complex multi-part formula in SQL**
+  Nesting counts, averages, and calculations required careful structuring and use of `NULLIF` to avoid divide-by-zero. Rounding ensured clean output.
 ---
 
 ## Summary
